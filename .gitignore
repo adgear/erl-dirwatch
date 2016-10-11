@@ -2,3 +2,4 @@ ebin/
 priv/*.so
 _build/
 .rebar3/
+rebar.lock
