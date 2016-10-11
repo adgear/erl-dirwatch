@@ -53,7 +53,7 @@ stop(Handle) ->
 new_watcher(Pid, Paths, CooldownMs) ->
     ok = load(),
     Port = open_port({spawn_driver,
-                      ["dirwatch ", integer_to_list(CooldownMs, 10), $\s, lists:join($\s, Paths)]},
+                      ["dirwatch ", integer_to_list(CooldownMs, 10)]},
                      [in]),
     watch(#state{pid=Pid, port=Port}).
 

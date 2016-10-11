@@ -5,9 +5,9 @@
 #include "common.h"
 
 
-bool common_get_arguments(char *command, char **path, unsigned long *cooldown)
+bool common_get_arguments(char *command, unsigned long *cooldown)
 {
-    if (!command || !path || !cooldown) return false;
+    if (!command || !cooldown) return false;
 
     command = strchr(command, ' ');
     if (!command) return false;
@@ -16,9 +16,7 @@ bool common_get_arguments(char *command, char **path, unsigned long *cooldown)
     if (!*command) return false;
 
     *cooldown = strtoul(command, &command, 10);
-    if (' ' != *command) return false;
-    command += strspn(command, " ");
-    if (!*command) return false;
-    *path = command;
+    if (*command) return false;
+
     return true;
 }

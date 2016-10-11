@@ -18,7 +18,6 @@
 struct instance {
     ErlDrvPort port;
     int fd;
-    int wd;
     unsigned n_cooldowns;
     unsigned long cooldown;
 };
@@ -31,8 +30,7 @@ enum { MAX_COOLDOWNS = 12 };
 static ErlDrvData start(ErlDrvPort port, char *command)
 {
     unsigned long cooldown;
-    char *path;
-    if (!common_get_arguments(command, &path, &cooldown))
+    if (!common_get_arguments(command, &cooldown))
         return ERL_DRV_ERROR_BADARG;
 
     struct instance *me = driver_alloc(sizeof(*me));
@@ -44,11 +42,6 @@ static ErlDrvData start(ErlDrvPort port, char *command)
     me->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (me->fd < 0)
         goto fail0;
-
-    int wd = inotify_add_watch(me->fd, path,
-                               IN_CREATE|IN_DELETE|IN_MOVE|IN_CLOSE_WRITE);
-    if (-1 == wd)
-        goto fail1;
 
     if (driver_select(me->port, (ErlDrvEvent)(intptr_t)me->fd,
                       ERL_DRV_READ|ERL_DRV_USE, 1))
