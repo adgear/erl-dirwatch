@@ -30,16 +30,16 @@ load() ->
     end.
 
 
--spec start(pid(), file:name_all()) -> {ok,handle()} | {error,_}.
+-spec start(pid(), [file:name_all()]) -> {ok,handle()} | {error,_}.
 
 %% Default cooldown of 5 seconds
-start(Self, Path) -> start(Self, Path, 5000).
+start(Self, Paths) -> start(Self, Paths, 5000).
 
 
--spec start(pid(), file:name_all(), timer:time()) -> {ok,handle()} | {error,_}.
+-spec start(pid(), [file:name_all()], timer:time()) -> {ok,handle()} | {error,_}.
 
-start(Self, Path, CooldownMs) ->
-    Pid = spawn_link(fun () -> new_watcher(Self, Path, CooldownMs) end),
+start(Self, Paths, CooldownMs) ->
+    Pid = spawn_link(fun () -> new_watcher(Self, Paths, CooldownMs) end),
     {ok, Pid}.
 
 
@@ -50,10 +50,10 @@ stop(Handle) ->
     ok.
 
 
-new_watcher(Pid, Path, CooldownMs) ->
+new_watcher(Pid, Paths, CooldownMs) ->
     ok = load(),
     Port = open_port({spawn_driver,
-                      ["dirwatch ", integer_to_list(CooldownMs, 10), $\s, Path]},
+                      ["dirwatch ", integer_to_list(CooldownMs, 10), $\s, lists:join($\s, Paths)]},
                      [in]),
     watch(#state{pid=Pid, port=Port}).
 
