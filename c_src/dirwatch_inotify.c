@@ -65,6 +65,19 @@ static void stop(ErlDrvData me_)
 }
 
 
+ErlDrvSSizeT control(
+    ErlDrvData me_, unsigned int UNUSED,
+    char *buf, ErlDrvSizeT UNUSED,
+    char **rbuf, ErlDrvSizeT UNUSED)
+{
+    *rbuf = NULL;
+    struct instance *me = (struct instance *)me_;
+    int wd = inotify_add_watch(me->fd, buf, IN_CLOSE_WRITE | IN_MOVE_SELF);
+    if (wd < 0) return -1;
+    return 0;
+}
+
+
 static void ready_input(ErlDrvData me_, ErlDrvEvent event)
 {
     struct instance *me = (struct instance *)me_;
@@ -104,6 +117,7 @@ static ErlDrvEntry driver_entry = {
     .init = NULL,
     .start = start,
     .stop = stop,
+    .control = control,
     .ready_input = ready_input,
     .stop_select = stop_select,
     .timeout = timeout,

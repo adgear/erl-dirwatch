@@ -55,6 +55,7 @@ new_watcher(Pid, Paths, CooldownMs) ->
     Port = open_port({spawn_driver,
                       ["dirwatch ", integer_to_list(CooldownMs, 10)]},
                      [in]),
+    lists:foreach(fun (Path) -> port_control(Port, 0, Path) end, Paths),
     watch(#state{pid=Pid, port=Port}).
 
 
