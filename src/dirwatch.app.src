@@ -1,5 +1,0 @@
-{application, dirwatch,
- [{description, "Watch for activity in a directory"},
-  {vsn, git}
- ]
-}.
