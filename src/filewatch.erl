@@ -6,7 +6,8 @@
 
 -record(state,
         {pid :: pid(),
-         port :: port()}).
+         port :: port(),
+         paths :: #{integer() => file:name_all()}}).
 
 priv_dir() ->
     case code:priv_dir(?MODULE) of
@@ -41,15 +42,18 @@ stop(Handle) ->
 new_watcher(Pid, Paths) ->
     ok = load(),
     Port = open_port({spawn_driver, "filewatch"}, [in]),
-    ok = erlang:port_call(Port, 1, Paths),
-    watch(#state{pid=Pid, port=Port}).
+    Map = lists:foldl(fun (Path, Map) ->
+        {ok, Descriptor} = erlang:port_call(Port, 1337, Path),
+        Map#{Descriptor => Path}
+    end, #{}, Paths),
+    watch(#state{pid=Pid, port=Port, paths=Map}).
 
 -spec watch(#state{}) -> ok.
 
-watch(S=#state{pid = Pid, port = Port}) ->
+watch(S=#state{pid = Pid, port = Port, paths = Paths}) ->
     receive
-        {Port, Paths} ->
-            Pid ! {filewatch, self(), Paths},
+        {Port, Descriptors} ->
+            Pid ! {filewatch, self(), [maps:get(D, Paths) || D <- Descriptors]},
             watch(S);
         terminate ->
             ok;
