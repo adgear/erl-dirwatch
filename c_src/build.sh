@@ -6,32 +6,39 @@
 
 set -eu
 
-ERTS_INCLUDE_DIR=${ERTS_INCLUDE_DIR:-$(erl -noshell -s init stop -eval "io:format(\"~s/erts-~s/include/\", [code:root_dir(), erlang:system_info(version)]).")}
-ERL_INCLUDE_DIR=${ERL_INCLUDE_DIR:-$(erl -noshell -s init stop -eval "io:format(\"~s/usr/include/\", [code:root_dir()]).")}
+erlang_eval() {
+    erl -noshell -s init stop -eval "io:format(\"~s\", [$1]), halt()."
+}
+
+ERL_ROOT=${ERL_ROOT:-$(erlang_eval 'code:root_dir()')}
+ERL_INCLUDE_DIR=${ERL_INCLUDE_DIR:-${ERL_ROOT}/usr/include/}
+ERL_LIB_DIR=${ERL_LIB_DIR:-${ERL_ROOT}/usr/lib}
+ERTS_INCLUDE_DIR=${ERTS_INCLUDE_DIR:-${ERL_ROOT}/erts-$(erlang_eval 'erlang:system_info(version)')/include}
+
 CC=${CC:-cc}
 DEFAULT_CFLAGS="-O3 -march=native -mtune=native -ggdb -Wall -Wextra -Wno-missing-field-initializers"
 CFLAGS="-fPIC -I${ERTS_INCLUDE_DIR} -I${ERL_INCLUDE_DIR} -std=gnu11 ${CFLAGS:-$DEFAULT_CFLAGS}"
-LDFLAGS=${LDFLAGS:-}
+LDFLAGS="-L${ERL_LIB_DIR} -lei ${LDFLAGS:-}"
 
 OS="$(uname -s)"
 
 case "$OS" in
     Linux)
-        IMPLEMENTATION=dirwatch_inotify
+        IMPLEMENTATION=filewatch_inotify
         ;;
     Darwin)
         LDFLAGS="$LDFLAGS -flat_namespace -undefined suppress"
-        IMPLEMENTATION=dirwatch_kqueue
+        IMPLEMENTATION=filewatch_kqueue
         ;;
-    DragonFly) IMPLEMENTATION=dirwatch_kqueue;;
-    FreeBSD) IMPLEMENTATION=dirwatch_kqueue;;
+    DragonFly) IMPLEMENTATION=filewatch_kqueue;;
+    FreeBSD) IMPLEMENTATION=filewatch_kqueue;;
     *)
         echo "Not implemented yet for $OS.  Sorry."
         exit 1
         ;;
 esac
 
-TARGET=${TARGET:-./priv/dirwatch.so}
+TARGET=${TARGET:-./priv/filewatch.so}
 SRC=./c_src
 
 mkdir -p priv
@@ -46,4 +53,4 @@ up_to_date_p() {
 
 if (up_to_date_p); then exit 0; fi
 
-exec "$CC" $CFLAGS -shared -o "$TARGET" $SRC/common.c $SRC/$IMPLEMENTATION.c $LDFLAGS
+exec "$CC" $CFLAGS -shared -o "$TARGET" $SRC/$IMPLEMENTATION.c $LDFLAGS
