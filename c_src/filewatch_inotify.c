@@ -73,9 +73,13 @@ static ErlDrvSSizeT call(
 
     if (ei_decode_string(buf, &index, path) < 0) goto fail0;
 
-    char *error = NULL;
+    int error = 0;
+    char *error_str = NULL;
     int wd = inotify_add_watch(self->fd, path, IN_CLOSE_WRITE | IN_MOVE_SELF);
-    if (wd < 0) error = strerror(errno);
+    if (wd < 0) {
+        error = errno;
+        error_str = strerror(error);
+    }
 
     // Encode the terms first with a NULL buffer, which safely increments index
     // to determine the required buffer length. On the second iteration, either
@@ -91,13 +95,14 @@ static ErlDrvSSizeT call(
         }
 
         if (ei_encode_version(out, &index) < 0) goto fail1;
+        if (ei_encode_tuple_header(out, &index, 2) < 0) goto fail1;
         if (error) {
-            if (ei_encode_tuple_header(out, &index, 3) < 0) goto fail1;
             if (ei_encode_atom(out, &index, "error") < 0) goto fail1;
+            if (ei_encode_tuple_header(out, &index, 3) < 0) goto fail1;
             if (ei_encode_string(out, &index, path) < 0) goto fail1;
-            if (ei_encode_string(out, &index, error) < 0) goto fail1;
+            if (ei_encode_long(out, &index, error) < 0) goto fail1;
+            if (ei_encode_string(out, &index, error_str) < 0) goto fail1;
         } else {
-            if (ei_encode_tuple_header(out, &index, 2) < 0) goto fail1;
             if (ei_encode_atom(out, &index, "ok") < 0) goto fail1;
             if (ei_encode_long(out, &index, wd) < 0) goto fail1;
         }
