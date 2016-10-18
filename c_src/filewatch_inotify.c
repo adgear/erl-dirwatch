@@ -1,4 +1,6 @@
+#include <errno.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/inotify.h>
 #include <unistd.h>
 
@@ -52,34 +54,67 @@ static void stop(ErlDrvData self_)
     driver_free(self);
 }
 
-#include <assert.h>
-
 static ErlDrvSSizeT call(
     ErlDrvData self_,
     unsigned int UNUSED,
-    char *buf, ErlDrvSizeT len,
+    char *buf, ErlDrvSizeT UNUSED,
     char **rbuf, ErlDrvSizeT rlen,
     unsigned int *UNUSED)
 {
+    struct instance *self = (struct instance *)self_;
+
+    int index = 0;
+    if (ei_decode_version(buf, &index, NULL) < 0) return -1;
+
+    int type, path_len;
+    if (ei_get_type(buf, &index, &type, &path_len) < 0) return -1;
+    char *path = malloc(path_len + 1);
+    if (!path) return -1;
+
+    if (ei_decode_string(buf, &index, path) < 0) goto fail0;
+
+    char *error = NULL;
+    int wd = inotify_add_watch(self->fd, path, IN_CLOSE_WRITE | IN_MOVE_SELF);
+    if (wd < 0) error = strerror(errno);
+
     // Encode the terms first with a NULL buffer, which safely increments index
     // to determine the required buffer length. On the second iteration, either
     // encode to *rbuf if it is big enough, or to a new allocation of the right
     // size.
     char *out = NULL;
-    int index = 0;
+    index = 0;
     do {
-        if (index) out = ((ErlDrvSizeT)index <= rlen) ? *rbuf : driver_alloc(index);
-        index = 0;
-        ei_encode_version(out, &index);
-        ei_encode_tuple_header(out, &index, 2);
-        ei_encode_atom(out, &index, "ok");
-        ei_encode_long(out, &index, 1337);
+        if (index) {
+            out = ((ErlDrvSizeT)index <= rlen) ? *rbuf : driver_alloc(index);
+            if (!out) goto fail0;
+            index = 0;
+        }
+
+        if (ei_encode_version(out, &index) < 0) goto fail1;
+        if (error) {
+            if (ei_encode_tuple_header(out, &index, 3) < 0) goto fail1;
+            if (ei_encode_atom(out, &index, "error") < 0) goto fail1;
+            if (ei_encode_string(out, &index, path) < 0) goto fail1;
+            if (ei_encode_string(out, &index, error) < 0) goto fail1;
+        } else {
+            if (ei_encode_tuple_header(out, &index, 2) < 0) goto fail1;
+            if (ei_encode_atom(out, &index, "ok") < 0) goto fail1;
+            if (ei_encode_long(out, &index, wd) < 0) goto fail1;
+        }
     } while (!out);
+
+    free(path);
     *rbuf = out;
     return index;
+
+fail1:
+    if (out && out != *rbuf) driver_free(out);
+fail0:
+    free(path);
+    return -1;
 }
 
-static void ready_input(ErlDrvData self_, ErlDrvEvent event)
+static void ready_input(ErlDrvData UNUSED, ErlDrvEvent UNUSED)
 {
     // TODO
 }
