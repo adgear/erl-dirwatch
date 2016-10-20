@@ -52,8 +52,8 @@ new_watcher(Pid, Paths) ->
 
 watch(S=#state{pid = Pid, port = Port, paths = Paths}) ->
     receive
-        {Port, Descriptors} ->
-            Pid ! {filewatch, self(), [maps:get(D, Paths) || D <- Descriptors]},
+        {Port, changed, Descriptors} ->
+            Pid ! {filewatch, self(), changed, [maps:get(D, Paths) || D <- Descriptors]},
             watch(S);
         terminate ->
             ok;

@@ -119,9 +119,31 @@ fail0:
     return -1;
 }
 
-static void ready_input(ErlDrvData UNUSED, ErlDrvEvent UNUSED)
+static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
 {
-    // TODO
+    struct instance *self = (struct instance *)self_;
+    int fd = (intptr_t)fd_;
+
+    char buf[4096] __attribute((aligned(__alignof(struct inotify_event))));
+    const struct inotify_event *event;
+    ssize_t len;
+    while ((len = read(fd, buf, sizeof(buf))) > 0) {
+        for (char *ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
+            event = (const struct inotify_event *)ptr;
+
+            ErlDrvTermData d[] = {
+                ERL_DRV_PORT, driver_mk_port(self->port),
+                ERL_DRV_ATOM, driver_mk_atom("changed"),
+                ERL_DRV_INT, event->wd,
+                ERL_DRV_NIL,
+                ERL_DRV_LIST, 2,
+                ERL_DRV_TUPLE, 3
+            };
+            erl_drv_output_term(driver_mk_port(self->port), d, sizeof(d) / sizeof(*d));
+        }
+    }
+
+    // TODO: Check errno != EAGAIN?
 }
 
 static ErlDrvEntry driver_entry = {
