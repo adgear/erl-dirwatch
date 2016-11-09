@@ -75,7 +75,8 @@ static ErlDrvSSizeT call(
 
     int error = 0;
     char *error_str = NULL;
-    int wd = inotify_add_watch(self->fd, path, IN_CLOSE_WRITE | IN_MOVE_SELF);
+    /* int wd = inotify_add_watch(self->fd, path, IN_ALL_EVENTS); */
+    int wd = inotify_add_watch(self->fd, path, IN_MODIFY | IN_MOVED_TO);
     if (wd < 0) {
         error = errno;
         error_str = strerror(error);
@@ -119,6 +120,49 @@ fail0:
     return -1;
 }
 
+ErlDrvTermData generate_event_atom(uint32_t mask)
+{
+    if (mask & IN_ACCESS) {
+        return driver_mk_atom("access");
+    }
+    if (mask & IN_ATTRIB) {
+        return driver_mk_atom("attribute_change");
+    }
+    if (mask & IN_CLOSE_WRITE ||
+        mask & IN_CLOSE_NOWRITE) {
+        return driver_mk_atom("close");
+    }
+    if (mask & IN_CREATE) {
+        return driver_mk_atom("create");
+    }
+    if (mask & IN_DELETE ||
+        mask & IN_DELETE_SELF) {
+        return driver_mk_atom("delete");
+    }
+    if (mask & IN_MODIFY) {
+        return driver_mk_atom("modify");
+    }
+    if (mask & IN_MOVE_SELF) {
+        return driver_mk_atom("move_self");
+    }
+    if (mask & IN_OPEN) {
+        return driver_mk_atom("open");
+    }
+    if (mask & IN_MOVED_FROM) {
+        return driver_mk_atom("moved_from");
+    }
+    if (mask & IN_MOVED_TO) {
+        return driver_mk_atom("moved_to");
+    }
+    if (mask & IN_IGNORED) {
+        return driver_mk_atom("remove_watch");
+    }
+    if (mask & IN_Q_OVERFLOW) {
+        return driver_mk_atom("queue_overflow");
+    }
+    return driver_mk_atom("other");
+}
+
 static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
 {
     struct instance *self = (struct instance *)self_;
@@ -126,18 +170,26 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
 
     char buf[4096] __attribute((aligned(__alignof(struct inotify_event))));
     const struct inotify_event *event;
+    ErlDrvTermData event_atom;
+    const char *name;
+    size_t name_len;
     ssize_t len;
     while ((len = read(fd, buf, sizeof(buf))) > 0) {
         for (char *ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
             event = (const struct inotify_event *)ptr;
+            name = event->name;
+            name_len = strlen(event->name);
+
+            event_atom = generate_event_atom(event->mask);
 
             ErlDrvTermData d[] = {
                 ERL_DRV_PORT, driver_mk_port(self->port),
-                ERL_DRV_ATOM, driver_mk_atom("changed"),
+                ERL_DRV_ATOM, event_atom,
+                ERL_DRV_STRING, name, name_len,
                 ERL_DRV_INT, event->wd,
                 ERL_DRV_NIL,
                 ERL_DRV_LIST, 2,
-                ERL_DRV_TUPLE, 3
+                ERL_DRV_TUPLE, 4
             };
             erl_drv_output_term(driver_mk_port(self->port), d, sizeof(d) / sizeof(*d));
         }

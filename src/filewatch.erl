@@ -7,7 +7,7 @@
 -record(state,
         {pid :: pid(),
          port :: port(),
-         paths :: #{integer() => file:name_all()}}).
+         map :: #{integer() => file:name_all()}}).
 
 priv_dir() ->
     case code:priv_dir(?MODULE) of
@@ -29,8 +29,8 @@ load() ->
 
 -spec start(pid(), [file:name_all()]) -> {ok, handle()} | {error, _}.
 
-start(Self, Paths) ->
-    Pid = spawn_link(fun () -> new_watcher(Self, Paths) end),
+start(Self, Pairs) ->
+    Pid = spawn_link(fun () -> init(Self, Pairs) end),
     {ok, Pid}.
 
 -spec stop(handle()) -> ok | {error, _}.
@@ -39,24 +39,53 @@ stop(Handle) ->
     Handle ! terminate,
     ok.
 
-new_watcher(Pid, Paths) ->
+init(Pid, Pairs) ->
     ok = load(),
     Port = open_port({spawn_driver, "filewatch"}, [in]),
-    Map = lists:foldl(fun (Path, Map) ->
-        {ok, Descriptor} = erlang:port_call(Port, 1337, Path),
-        Map#{Descriptor => Path}
-    end, #{}, Paths),
-    watch(#state{pid=Pid, port=Port, paths=Map}).
+    WatchMap = add_watches(create_watch_map(Pairs), Port),
+    watch(#state{pid=Pid, port=Port, map=WatchMap}).
+
+create_watch_map(Pairs) ->
+    create_watch_map(Pairs, maps:new()).
+create_watch_map([{Path, Term} = Pair | Pairs], Result) ->
+    Dir = filename:dirname(Path),
+    NewResult = case maps:get(Dir, Result, undefined) of
+                    undefined -> maps:put(Dir, [{filename:basename(Path), Term}], Result);
+                    Added -> maps:update(Dir, [Pair | Added], Result)
+                end,
+    create_watch_map(Pairs, NewResult);
+create_watch_map([], Result) -> Result.
+
+add_watches(DirMap, Port) ->
+    add_watches(maps:to_list(DirMap), Port, maps:new()).
+add_watches([{Path, _Pairs} = Dir | Dirs], Port, Result) ->
+    {ok, Descriptor} = erlang:port_call(Port, 1337, Path),
+    NewResult = maps:put(Descriptor, Dir, Result),
+    add_watches(Dirs, Port, NewResult);
+add_watches([], _Port, Result) -> Result.
 
 -spec watch(#state{}) -> ok.
 
-watch(S=#state{pid = Pid, port = Port, paths = Paths}) ->
+watch(S=#state{pid = Pid, port = Port, map = Map}) ->
     receive
-        {Port, changed, Descriptors} ->
-            Pid ! {filewatch, self(), changed, [maps:get(D, Paths) || D <- Descriptors]},
+        {Port, Msg, Name, Descriptors} ->
+            handle_event(Pid, Msg, Name, [maps:get(D, Map) || D <- Descriptors]),
             watch(S);
         terminate ->
             ok;
         _ ->
             exit(unexpected_message)
     end.
+
+handle_event(Pid, Msg, Name, [{_Dir, Pairs}]) ->
+    case proplists:lookup(Name, Pairs) of
+        none -> ok;
+        {Name, Term} -> Pid ! {filewatch, self(), Msg, Term}
+    end.
+
+reopen_wd(S=#state{port = Port, map = Map}, Descriptor) ->
+    Path = maps:get(Descriptor, Map),
+    {ok, NewDescriptor} = erlang:port_call(Port, 1337, Path),
+    NewMap = maps:put(NewDescriptor, Path,
+                        maps:remove(Descriptor, Map)),
+    S#state{map = NewMap}.
