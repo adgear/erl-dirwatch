@@ -27,7 +27,7 @@ load() ->
                                    [erl_ddll:format_error(Message)])
     end.
 
--spec start(pid(), [file:name_all()]) -> {ok, handle()} | {error, _}.
+-spec start(pid(), [{file:name_all(), term()}]) -> {ok, handle()} | {error, _}.
 
 start(Self, Pairs) ->
     Pid = spawn_link(fun () -> init(Self, Pairs) end),
@@ -77,15 +77,11 @@ watch(S=#state{pid = Pid, port = Port, map = Map}) ->
             exit(unexpected_message)
     end.
 
-handle_event(Pid, Msg, Name, [{_Dir, Pairs}]) ->
+handle_event(_Pid, _Msg, _Name, []) ->
+    ok;
+handle_event(Pid, Msg, Name, [{_Dir, Pairs} | Rest]) ->
     case proplists:lookup(Name, Pairs) of
         none -> ok;
         {Name, Term} -> Pid ! {filewatch, self(), Msg, Term}
-    end.
-
-reopen_wd(S=#state{port = Port, map = Map}, Descriptor) ->
-    Path = maps:get(Descriptor, Map),
-    {ok, NewDescriptor} = erlang:port_call(Port, 1337, Path),
-    NewMap = maps:put(NewDescriptor, Path,
-                        maps:remove(Descriptor, Map)),
-    S#state{map = NewMap}.
+    end,
+    handle_event(Pid, Msg, Name, Rest).

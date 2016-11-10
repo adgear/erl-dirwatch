@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
+#include <assert.h>
 #include <sys/inotify.h>
 #include <unistd.h>
 
@@ -71,12 +72,11 @@ static ErlDrvSSizeT call(
     char *path = malloc(path_len + 1);
     if (!path) return -1;
 
-    if (ei_decode_string(buf, &index, path) < 0) goto fail0;
+    if (ei_decode_string(buf, &index, path) < 0) goto fail_decode;
 
     int error = 0;
     char *error_str = NULL;
-    /* int wd = inotify_add_watch(self->fd, path, IN_ALL_EVENTS); */
-    int wd = inotify_add_watch(self->fd, path, IN_MODIFY | IN_MOVED_TO);
+    int wd = inotify_add_watch(self->fd, path, IN_MODIFY | IN_MOVED_TO | IN_CREATE);
     if (wd < 0) {
         error = errno;
         error_str = strerror(error);
@@ -91,21 +91,21 @@ static ErlDrvSSizeT call(
     do {
         if (index) {
             out = ((ErlDrvSizeT)index <= rlen) ? *rbuf : driver_alloc(index);
-            if (!out) goto fail0;
+            if (!out) goto fail_alloc;
             index = 0;
         }
 
-        if (ei_encode_version(out, &index) < 0) goto fail1;
-        if (ei_encode_tuple_header(out, &index, 2) < 0) goto fail1;
+        if (ei_encode_version(out, &index) < 0) goto fail_encode;
+        if (ei_encode_tuple_header(out, &index, 2) < 0) goto fail_encode;
         if (error) {
-            if (ei_encode_atom(out, &index, "error") < 0) goto fail1;
-            if (ei_encode_tuple_header(out, &index, 3) < 0) goto fail1;
-            if (ei_encode_string(out, &index, path) < 0) goto fail1;
-            if (ei_encode_long(out, &index, error) < 0) goto fail1;
-            if (ei_encode_string(out, &index, error_str) < 0) goto fail1;
+            if (ei_encode_atom(out, &index, "error") < 0) goto fail_encode;
+            if (ei_encode_tuple_header(out, &index, 3) < 0) goto fail_encode;
+            if (ei_encode_string(out, &index, path) < 0) goto fail_encode;
+            if (ei_encode_long(out, &index, error) < 0) goto fail_encode;
+            if (ei_encode_string(out, &index, error_str) < 0) goto fail_encode;
         } else {
-            if (ei_encode_atom(out, &index, "ok") < 0) goto fail1;
-            if (ei_encode_long(out, &index, wd) < 0) goto fail1;
+            if (ei_encode_atom(out, &index, "ok") < 0) goto fail_encode;
+            if (ei_encode_long(out, &index, wd) < 0) goto fail_encode;
         }
     } while (!out);
 
@@ -113,9 +113,11 @@ static ErlDrvSSizeT call(
     *rbuf = out;
     return index;
 
-fail1:
+  fail_encode:
     if (out && out != *rbuf) driver_free(out);
-fail0:
+
+  fail_alloc:
+  fail_decode:
     free(path);
     return -1;
 }
@@ -170,22 +172,20 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
 
     char buf[4096] __attribute((aligned(__alignof(struct inotify_event))));
     const struct inotify_event *event;
-    ErlDrvTermData event_atom;
-    const char *name;
-    size_t name_len;
     ssize_t len;
+
     while ((len = read(fd, buf, sizeof(buf))) > 0) {
-        for (char *ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
+        assert(len >= 0); // \todo Should really return an errno to erlang.
+
+        const char *ptr;
+        for (ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
             event = (const struct inotify_event *)ptr;
-            name = event->name;
-            name_len = strlen(event->name);
 
-            event_atom = generate_event_atom(event->mask);
-
+            ErlDrvTermData event_atom = generate_event_atom(event->mask);
             ErlDrvTermData d[] = {
                 ERL_DRV_PORT, driver_mk_port(self->port),
                 ERL_DRV_ATOM, event_atom,
-                ERL_DRV_STRING, name, name_len,
+                ERL_DRV_STRING, (ErlDrvTermData) event->name, (int) event->len,
                 ERL_DRV_INT, event->wd,
                 ERL_DRV_NIL,
                 ERL_DRV_LIST, 2,
@@ -193,9 +193,12 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
             };
             erl_drv_output_term(driver_mk_port(self->port), d, sizeof(d) / sizeof(*d));
         }
-    }
 
-    // TODO: Check errno != EAGAIN?
+        // Reading the kernel code, it looks like a read on an inotify fd only
+        // ever returns one event which means that there should never be any
+        // leftover bytes at this point.
+        assert(ptr - buf == len);
+    }
 }
 
 static ErlDrvEntry driver_entry = {
