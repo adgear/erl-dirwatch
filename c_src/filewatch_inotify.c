@@ -175,7 +175,7 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
     ssize_t len;
 
     while ((len = read(fd, buf, sizeof(buf))) > 0) {
-        assert(len >= 0); // \todo Should really return an errno to erlang.
+        assert(len >= 0); // TODO(rattab) Should really return an errno to erlang.
 
         const char *ptr;
         for (ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
