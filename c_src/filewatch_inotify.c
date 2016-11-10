@@ -165,27 +165,30 @@ ErlDrvTermData generate_event_atom(uint32_t mask)
     return driver_mk_atom("other");
 }
 
+#define aligned(x) __attribute((aligned(x)))
+#define alignof(x) __alignof(x)
+
 static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
 {
     struct instance *self = (struct instance *)self_;
     int fd = (intptr_t)fd_;
 
-    char buf[4096] __attribute((aligned(__alignof(struct inotify_event))));
+    char buf[4096] aligned(alignof(struct inotify_event));
     const struct inotify_event *event;
     ssize_t len;
 
     while ((len = read(fd, buf, sizeof(buf))) > 0) {
-        assert(len >= 0); // TODO(rattab) Should really return an errno to erlang.
 
         const char *ptr;
         for (ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
             event = (const struct inotify_event *)ptr;
+            size_t name_len = strlen(event->name);
 
             ErlDrvTermData event_atom = generate_event_atom(event->mask);
             ErlDrvTermData d[] = {
                 ERL_DRV_PORT, driver_mk_port(self->port),
                 ERL_DRV_ATOM, event_atom,
-                ERL_DRV_STRING, (ErlDrvTermData) event->name, (int) event->len,
+                ERL_DRV_STRING, (ErlDrvTermData) event->name, name_len,
                 ERL_DRV_INT, event->wd,
                 ERL_DRV_NIL,
                 ERL_DRV_LIST, 2,
@@ -198,6 +201,11 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
         // ever returns one event which means that there should never be any
         // leftover bytes at this point.
         assert(ptr - buf == len);
+    }
+
+    if (errno != EAGAIN) {
+         // TODO(rattab): Should really return an errno to erlang.
+        assert(len >= 0);
     }
 }
 
