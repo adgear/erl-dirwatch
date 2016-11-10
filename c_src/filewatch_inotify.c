@@ -203,10 +203,8 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
         assert(ptr - buf == len);
     }
 
-    if (errno != EAGAIN) {
-         // TODO(rattab): Should really return an errno to erlang.
-        assert(len >= 0);
-    }
+    // TODO(rattab): Should really return an errno to erlang.
+    assert(len >= 0 || errno == EAGAIN);
 }
 
 static ErlDrvEntry driver_entry = {
