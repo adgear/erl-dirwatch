@@ -197,14 +197,14 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
             erl_drv_output_term(driver_mk_port(self->port), d, sizeof(d) / sizeof(*d));
         }
 
-        // Reading the kernel code, it looks like a read on an inotify fd only
-        // ever returns one event which means that there should never be any
-        // leftover bytes at this point.
+        // The kernel always checks if there is enough room in the buffer for
+        // an entire event, so there should be nothing left over.
         assert(ptr - buf == len);
     }
 
-    // TODO(rattab): Should really return an errno to erlang.
-    assert(len >= 0 || errno == EAGAIN);
+    if (len < 0 && errno != EAGAIN) {
+        driver_failure_posix(self->port, errno);
+    }
 }
 
 static ErlDrvEntry driver_entry = {
