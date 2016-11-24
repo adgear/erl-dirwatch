@@ -1,6 +1,7 @@
 -module(filewatch).
 
 -export([start/2, stop/1]).
+-compile([export_all]).
 
 -type handle() :: pid().
 
@@ -30,7 +31,8 @@ load() ->
 -spec start(pid(), [{file:name_all(), term()}]) -> {ok, handle()} | {error, _}.
 
 start(Self, Pairs) ->
-    Pid = spawn_link(fun () -> init(Self, Pairs) end),
+    BPairs = [{erlang:iolist_to_binary(filename:absname(Path)), Term} || {Path, Term} <- Pairs],
+    Pid = spawn_link(fun () -> init(Self, BPairs) end),
     {ok, Pid}.
 
 -spec stop(handle()) -> ok | {error, _}.
@@ -42,34 +44,38 @@ stop(Handle) ->
 init(Pid, Pairs) ->
     ok = load(),
     Port = open_port({spawn_driver, "filewatch"}, [in]),
-    WatchMap = add_watches(create_watch_map(Pairs), Port),
+    WatchMap = add_watches(create_watch_list(Pairs), Port),
     watch(#state{pid=Pid, port=Port, map=WatchMap}).
 
-create_watch_map(Pairs) ->
-    create_watch_map(Pairs, maps:new()).
-create_watch_map([{Path, Term} = Pair | Pairs], Result) ->
-    Dir = filename:dirname(Path),
-    NewResult = case maps:get(Dir, Result, undefined) of
-                    undefined -> maps:put(Dir, [{filename:basename(Path), Term}], Result);
-                    Added -> maps:update(Dir, [Pair | Added], Result)
-                end,
-    create_watch_map(Pairs, NewResult);
-create_watch_map([], Result) -> Result.
+create_watch_list(Pairs) ->
+    create_watch_list(Pairs, []).
+create_watch_list([{Path, Term} | Pairs], Result) ->
+    DirName = filename:dirname(Path),
+    FileName = filename:basename(Path),
+    Value = case lists:keyfind(DirName, 1, Result) of
+                false -> {DirName, [{FileName, Term}]};
+                {DirName, Terms} -> {DirName, [{FileName, Term} | Terms]}
+            end,
+    create_watch_list(Pairs, lists:keystore(DirName, 1, Result, Value));
+create_watch_list([], Result) -> Result.
 
-add_watches(DirMap, Port) ->
-    add_watches(maps:to_list(DirMap), Port, maps:new()).
-add_watches([{Path, _Pairs} = Dir | Dirs], Port, Result) ->
-    {ok, Descriptor} = erlang:port_call(Port, 1337, Path),
-    NewResult = maps:put(Descriptor, Dir, Result),
-    add_watches(Dirs, Port, NewResult);
+add_watches(DirList, Port) ->
+    add_watches(DirList, Port, []).
+add_watches([{Dir, Files} | Pairs], Port, Result) ->
+    case erlang:port_call(Port, 1337, Dir) of
+        {ok, Descriptor} ->
+            add_watches(Pairs, Port, lists:keystore(Dir, 1, Result,
+                                                    {Dir, Descriptor, Files}));
+        {error, Reason} ->
+            error({filewatch, Reason, Dir})
+    end;
 add_watches([], _Port, Result) -> Result.
 
 -spec watch(#state{}) -> ok.
-
-watch(S=#state{pid = Pid, port = Port, map = Map}) ->
+watch(S=#state{port = Port}) ->
     receive
-        {Port, Msg, Name, Descriptors} ->
-            handle_event(Pid, Msg, Name, [maps:get(D, Map) || D <- Descriptors]),
+        {Port, Msgs} ->
+            handle_events(S, Msgs),
             watch(S);
         terminate ->
             ok;
@@ -77,11 +83,15 @@ watch(S=#state{pid = Pid, port = Port, map = Map}) ->
             exit(unexpected_message)
     end.
 
-handle_event(_Pid, _Msg, _Name, []) ->
-    ok;
-handle_event(Pid, Msg, Name, [{_Dir, Pairs} | Rest]) ->
-    case proplists:lookup(Name, Pairs) of
-        none -> ok;
-        {Name, Term} -> Pid ! {filewatch, self(), Msg, Term}
-    end,
-    handle_event(Pid, Msg, Name, Rest).
+handle_events(_S, []) -> ok;
+handle_events(S=#state{}, [{Name, Wd} | Msgs]) ->
+    handle_event(S, Name, Wd),
+    handle_events(S, Msgs).
+
+handle_event(#state{pid = Pid, map = Map}, Name, Wd) ->
+    BinName = list_to_binary(Name),
+    {_Dir, Wd, Pairs} = lists:keyfind(Wd, 2, Map),
+    case lists:keyfind(BinName, 1, Pairs) of
+        false -> ok;
+        {BinName, Term} -> Pid ! {filewatch, self(), Term}
+    end.

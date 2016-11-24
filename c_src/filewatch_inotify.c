@@ -10,9 +10,16 @@
 
 #include "macrology.h"
 
+enum { MAX_COOLDOWNS = 12, MSG_LENGTH = 11 };
+
 struct instance {
     ErlDrvPort port;
     int fd;
+    int len;
+    unsigned n_cooldowns;
+    unsigned long cooldown;
+    size_t pos;
+    ErlDrvTermData buf[(MAX_COOLDOWNS * MSG_LENGTH) + 3];
 };
 
 static ErlDrvData start(ErlDrvPort port, char *UNUSED)
@@ -21,6 +28,11 @@ static ErlDrvData start(ErlDrvPort port, char *UNUSED)
     if (!self) return ERL_DRV_ERROR_GENERAL;
     *self = (struct instance){0};
     self->port = port;
+    self->cooldown = 3000;
+
+    self->pos = 0;
+    self->buf[self->pos++] = ERL_DRV_PORT;
+    self->buf[self->pos++] = driver_mk_port(port);
 
     self->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (self->fd < 0) {
@@ -67,13 +79,19 @@ static ErlDrvSSizeT call(
     int index = 0;
     if (ei_decode_version(buf, &index, NULL) < 0) return -1;
 
-    int type, path_len;
-    if (ei_get_type(buf, &index, &type, &path_len) < 0) return -1;
-    char *path = malloc(path_len + 1);
+    int type;
+    int path_len_int;
+    if (ei_get_type(buf, &index, &type, &path_len_int) < 0) return -1;
+
+    assert(path_len_int >= 0);
+    char *path = malloc(path_len_int);
+    path[path_len_int] = 0;
     if (!path) return -1;
 
-    if (ei_decode_string(buf, &index, path) < 0) goto fail_decode;
+    long path_len_long = path_len_int;
+    if (ei_decode_binary(buf, &index, path, &path_len_long) < 0) goto fail_decode;
 
+    assert(path_len_int == path_len_long);
     int error = 0;
     char *error_str = NULL;
     int wd = inotify_add_watch(self->fd, path, IN_MODIFY | IN_MOVED_TO | IN_CREATE);
@@ -122,49 +140,6 @@ static ErlDrvSSizeT call(
     return -1;
 }
 
-ErlDrvTermData generate_event_atom(uint32_t mask)
-{
-    if (mask & IN_ACCESS) {
-        return driver_mk_atom("access");
-    }
-    if (mask & IN_ATTRIB) {
-        return driver_mk_atom("attribute_change");
-    }
-    if (mask & IN_CLOSE_WRITE ||
-        mask & IN_CLOSE_NOWRITE) {
-        return driver_mk_atom("close");
-    }
-    if (mask & IN_CREATE) {
-        return driver_mk_atom("create");
-    }
-    if (mask & IN_DELETE ||
-        mask & IN_DELETE_SELF) {
-        return driver_mk_atom("delete");
-    }
-    if (mask & IN_MODIFY) {
-        return driver_mk_atom("modify");
-    }
-    if (mask & IN_MOVE_SELF) {
-        return driver_mk_atom("move_self");
-    }
-    if (mask & IN_OPEN) {
-        return driver_mk_atom("open");
-    }
-    if (mask & IN_MOVED_FROM) {
-        return driver_mk_atom("moved_from");
-    }
-    if (mask & IN_MOVED_TO) {
-        return driver_mk_atom("moved_to");
-    }
-    if (mask & IN_IGNORED) {
-        return driver_mk_atom("remove_watch");
-    }
-    if (mask & IN_Q_OVERFLOW) {
-        return driver_mk_atom("queue_overflow");
-    }
-    return driver_mk_atom("other");
-}
-
 #define aligned(x) __attribute((aligned(x)))
 #define alignof(x) __alignof(x)
 
@@ -184,18 +159,18 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
             event = (const struct inotify_event *)ptr;
             size_t name_len = strlen(event->name);
 
-            ErlDrvTermData event_atom = generate_event_atom(event->mask);
-            ErlDrvTermData d[] = {
-                ERL_DRV_PORT, driver_mk_port(self->port),
-                ERL_DRV_ATOM, event_atom,
-                ERL_DRV_STRING, (ErlDrvTermData) event->name, name_len,
-                ERL_DRV_INT, event->wd,
-                ERL_DRV_NIL,
-                ERL_DRV_LIST, 2,
-                ERL_DRV_TUPLE, 4
-            };
-            erl_drv_output_term(driver_mk_port(self->port), d, sizeof(d) / sizeof(*d));
+            self->buf[self->pos++] = ERL_DRV_STRING;
+            self->buf[self->pos++] = (ErlDrvTermData) event->name;
+            self->buf[self->pos++] = name_len;
+            self->buf[self->pos++] = ERL_DRV_INT;
+            self->buf[self->pos++] = event->wd;
+            self->buf[self->pos++] = ERL_DRV_TUPLE;
+            self->buf[self->pos++] = 2;
+            self->len++;
         }
+
+        if (++self->n_cooldowns < MAX_COOLDOWNS)
+            driver_set_timer(self->port, self->cooldown);
 
         // The kernel always checks if there is enough room in the buffer for
         // an entire event, so there should be nothing left over.
@@ -205,6 +180,29 @@ static void ready_input(ErlDrvData self_, ErlDrvEvent fd_)
     if (len < 0 && errno != EAGAIN) {
         driver_failure_posix(self->port, errno);
     }
+
+    // TODO(rattab): Should really return an errno to erlang.
+    assert(len >= 0 || errno == EAGAIN);
+}
+
+static void timeout(ErlDrvData self_)
+{
+    struct instance *self = (struct instance *)self_;
+
+    self->n_cooldowns = 0;
+    self->buf[self->pos++] = ERL_DRV_NIL;
+    self->buf[self->pos++] = ERL_DRV_LIST;
+    self->buf[self->pos++] = self->len + 1;
+    self->buf[self->pos++] = ERL_DRV_TUPLE;
+    self->buf[self->pos++] = 2;
+    int len = self->pos;
+
+    /* Reset to write over previous data */
+    self->pos = 2;
+    self->len = 0;
+
+    erl_drv_output_term(driver_mk_port(self->port),
+                        self->buf, len);
 }
 
 static ErlDrvEntry driver_entry = {
@@ -214,6 +212,7 @@ static ErlDrvEntry driver_entry = {
     .minor_version = ERL_DRV_EXTENDED_MINOR_VERSION,
     .start = start,
     .stop_select = stop_select,
+    .timeout = timeout,
     .stop = stop,
     .call = call,
     .ready_input = ready_input
