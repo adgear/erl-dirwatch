@@ -84,9 +84,8 @@ static ErlDrvSSizeT call(
     if (ei_get_type(buf, &index, &type, &path_len_int) < 0) return -1;
 
     assert(path_len_int >= 0);
-    char *path = malloc(path_len_int);
-    path[path_len_int] = 0;
-    if (!path) return -1;
+    char path[path_len_int];
+    path[path_len_int-1] = 0;
 
     long path_len_long = path_len_int;
     if (ei_decode_binary(buf, &index, path, &path_len_long) < 0) goto fail_decode;
@@ -127,7 +126,6 @@ static ErlDrvSSizeT call(
         }
     } while (!out);
 
-    free(path);
     *rbuf = out;
     return index;
 
