@@ -84,11 +84,10 @@ static ErlDrvSSizeT call(
     if (ei_get_type(buf, &index, &type, &path_len_int) < 0) return -1;
 
     assert(path_len_int >= 0);
-    char path[path_len_int];
-    path[path_len_int-1] = 0;
-
+    char path[path_len_int+1];
     long path_len_long = path_len_int;
     if (ei_decode_binary(buf, &index, path, &path_len_long) < 0) goto fail_decode;
+    path[path_len_int] = 0;
 
     assert(path_len_int == path_len_long);
     int error = 0;
@@ -134,7 +133,6 @@ static ErlDrvSSizeT call(
 
   fail_alloc:
   fail_decode:
-    free(path);
     return -1;
 }
 
