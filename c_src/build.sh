@@ -28,15 +28,16 @@ case "$OS" in
         ;;
     Darwin)
         LDFLAGS="$LDFLAGS -flat_namespace -undefined suppress"
-        IMPLEMENTATION=filewatch_kqueue
+        IMPLEMENTATION=filewatch_noop
         ;;
-    DragonFly) IMPLEMENTATION=filewatch_kqueue;;
-    FreeBSD) IMPLEMENTATION=filewatch_kqueue;;
     *)
-        echo "Not implemented yet for $OS.  Sorry."
-        exit 1
+        IMPLEMENTATION=filewatch_noop
         ;;
 esac
+
+if [ "$IMPLEMENTATION" = "filewatch_noop" ]; then
+    echo "warning: using filewatch_noop implementation"
+fi
 
 TARGET=${TARGET:-./priv/filewatch.so}
 SRC=./c_src
