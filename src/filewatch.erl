@@ -31,8 +31,12 @@ load() ->
 -spec start(pid(), [{file:name_all(), term()}]) -> {ok, handle()} | {error, _}.
 
 start(Self, Pairs) ->
+    CooldownMs = case application:get_env(cooldown) of
+                     {ok, Cd} -> Cd;
+                     undefined -> 3000
+                 end,
     BPairs = [{erlang:iolist_to_binary(filename:absname(Path)), Term} || {Path, Term} <- Pairs],
-    Pid = spawn_link(fun () -> init(Self, BPairs) end),
+    Pid = spawn_link(fun () -> init(Self, BPairs, CooldownMs) end),
     {ok, Pid}.
 
 -spec stop(handle()) -> ok | {error, _}.
@@ -41,23 +45,30 @@ stop(Handle) ->
     Handle ! terminate,
     ok.
 
-init(Pid, Pairs) ->
+init(Pid, Pairs, CooldownMs) ->
     ok = load(),
-    Port = open_port({spawn_driver, "filewatch"}, [in]),
+    Port = open_port({spawn_driver,
+                      ["filewatch ", integer_to_list(CooldownMs, 10)]}, [in]),
     WatchMap = add_watches(create_watch_list(Pairs), Port),
     watch(#state{pid=Pid, port=Port, map=WatchMap}).
 
 create_watch_list(Pairs) ->
     create_watch_list(Pairs, []).
 create_watch_list([{Path, Term} | Pairs], Result) ->
-    DirName = filename:dirname(Path),
-    FileName = filename:basename(Path),
+    case filelib:is_dir(Path) of
+        true  -> add_to_watch_list({Path, "*", Term}, Pairs, Result);
+        false -> add_to_watch_list({filename:dirname(Path),
+                                   filename:basename(Path),
+                                   Term}, Pairs, Result)
+    end;
+create_watch_list([], Result) -> Result.
+
+add_to_watch_list({DirName, FileName, Term}, Pairs, Result) ->
     Value = case lists:keyfind(DirName, 1, Result) of
                 false -> {DirName, [{FileName, Term}]};
                 {DirName, Terms} -> {DirName, [{FileName, Term} | Terms]}
             end,
-    create_watch_list(Pairs, lists:keystore(DirName, 1, Result, Value));
-create_watch_list([], Result) -> Result.
+    create_watch_list(Pairs, lists:keystore(DirName, 1, Result, Value)).
 
 add_watches(DirList, Port) ->
     add_watches(DirList, Port, []).
@@ -92,6 +103,19 @@ handle_event(#state{pid = Pid, map = Map}, Name, Wd) ->
     BinName = list_to_binary(Name),
     {_Dir, Wd, Pairs} = lists:keyfind(Wd, 2, Map),
     case lists:keyfind(BinName, 1, Pairs) of
-        false -> ok;
-        {BinName, Term} -> Pid ! {filewatch, self(), Term}
+        false -> case has_wildcard(Pairs) of
+                     {true, Term} -> msg(Pid, Term);
+                     false -> ok
+                 end;
+        {BinName, Term} -> msg(Pid, Term)
     end.
+
+has_wildcard(Pairs) ->
+    case lists:keyfind("*", 1, Pairs) of
+        {"*", Term} -> {true, Term};
+        false -> false
+    end.
+
+
+msg(Pid, Term) ->
+    Pid ! {filewatch, self(), Term}.

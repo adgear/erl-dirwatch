@@ -22,3 +22,17 @@ bool common_get_arguments(char *command, char **path, unsigned long *cooldown)
     *path = command;
     return true;
 }
+
+bool common_get_arguments2(char *command, unsigned long *cooldown)
+{
+    if (!command || !cooldown) return false;
+
+    command = strchr(command, ' ');
+    if (!command) return false;
+
+    command += strspn(command, " ");
+    if (!*command) return false;
+
+    *cooldown = strtoul(command, &command, 10);
+    return true;
+}
