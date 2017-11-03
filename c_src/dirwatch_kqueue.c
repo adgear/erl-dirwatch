@@ -136,8 +136,12 @@ static void cleanup_fds(struct instance *me)
     for (size_t i = 0; i < me->max_fds_seen; ++i) {
         if (i == (size_t)me->fd) continue;
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED > MAC_OS_X_VERSION_10_11
+
         if (is_watched(me, i))
             close(i);
+#endif
+
     }
     me->max_fds_seen = me->fd;
 }
